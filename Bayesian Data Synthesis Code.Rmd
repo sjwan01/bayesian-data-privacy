@@ -1,0 +1,1103 @@
+---
+title: "MATH301 Data Modeling"
+author: "Shunji & Jade"
+date: "2022-10-01"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(brms)
+library(ggplot2)
+library(bestNormalize)
+library(dplyr)
+library(reclin2)
+library(readr)
+library(rmutil)
+library(caret)
+data <- read.csv(file = "insurance.csv")
+```
+
+
+```{r}
+data[1, ]
+ggplot(data, aes(x = charges)) + geom_density() + theme_bw()
+chargesBN <- bestNormalize(data$charges, r = 1, k = 5)
+chargesBN
+data$transformed_charges <- chargesBN$x.t
+ggplot(data, aes(x = transformed_charges)) + geom_density() + theme_bw()
+```
+
+```{r}
+# assign 1 to male and 2 to female
+data$sex <- ifelse(data$sex == "male", 1, 2)
+data$age_cat <- as.factor(ifelse(data$age < 30, 1,
+                          ifelse(data$age < 50, 2, 3)))
+original <- data
+```
+
+```{r}
+ff1 <- stats::as.formula(transformed_charges ~ 1 + bmi + smoker + region)
+model1 <- stats::model.frame(ff1, data)
+X1 <- data.frame(stats::model.matrix(ff1, model1))
+```
+
+```{r}
+fit1 <- brms::brm(data = data,
+                  family = gaussian,
+                  transformed_charges ~ 1 + bmi + smoker + region,
+                  iter = 5000,
+                  warmup = 3000,
+                  thin = 1,
+                  chains = 1,
+                  seed = 1)
+```
+
+```{r}
+post_fit1 <- brms::posterior_samples(x = fit1)
+post_fit1[1:3, ]
+```
+
+```{r}
+# bayesplot::mcmc_trace(x = fit1, 
+#                       pars = c("b_Intercept", "b_bmi",
+#                              "b_smokeryes", "b_regionnorthwest",
+#                              "b_regionsoutheast",
+#                              "b_regionsouthwest", "sigma"))
+# bayesplot::mcmc_acf(x = fit1, 
+#                     pars = c("b_Intercept", "b_bmi",
+#                              "b_smokeryes", "b_regionnorthwest",
+#                              "b_regionsoutheast",
+#                              "b_regionsouthwest", "sigma"))
+
+synthesize1_func <- function(X, post_draws, index, n, seed){
+  set.seed(seed)
+  mean_Y <- as.matrix(X) %*%
+  t(data.matrix(post_draws[index, c("b_Intercept", "b_bmi",
+                                   "b_smokeryes", "b_regionnorthwest",
+                                   "b_regionsoutheast",
+                                   "b_regionsouthwest")]))
+  synthetic_Y <- stats::rnorm(n, mean_Y, post_draws[index, "sigma"])
+  data.frame(X, synthetic_Y)
+}
+
+n <- nrow(data)
+synthetic1 <- synthesize1_func(X = X1,
+                              post_draws = post_fit1,
+                              index = 1,
+                              n = nrow(X1),
+                              seed = 2)
+names(synthetic1) <- c("Intercept", "bmi",
+                       "smokeryes", "regionnorthwest",
+                       "regionsoutheast",
+                       "regionsouthwest", "transformed_charges")
+```
+
+```{r}
+df1 <- data.frame(confidential = data$transformed_charges,
+                 synthetic = synthetic1$transformed_charges)
+df_long1 <- reshape2::melt(df1)
+
+ggplot2::ggplot(data = df_long1, aes(value, colour = variable, linetype = variable)) +
+  geom_density() +
+  scale_colour_manual(values = c("#E69F00", "#999999"),
+                      guide = guide_legend(override.aes = list(
+                        linetype = c(1, 2)))) +
+  scale_linetype_manual(values = c(1, 2), guide = FALSE) +
+  ggtitle("Density plots of transformed_charges") +
+  xlab("transformed_charges") +
+  theme_bw(base_size = 15, base_family = "") +
+  theme(legend.title = element_blank())
+```
+
+```{r}
+reversed_charges <- predict(chargesBN,
+                            newdata = synthetic1$transformed_charges, inverse = TRUE)
+df2 <- data.frame(confidential = data$charges, 
+                 synthetic = reversed_charges)
+df_long2 <- reshape2::melt(df2)
+
+ggplot2::ggplot(data = df_long2, aes(value, colour = variable, linetype = variable)) +
+  geom_density() + 
+  scale_colour_manual(values = c("#E69F00", "#999999"),
+                      guide = guide_legend(override.aes = list(
+                        linetype = c(1, 2)))) + 
+  scale_linetype_manual(values = c(1, 2), guide = FALSE) + 
+  ggtitle("Density plots of transformed_charges") + 
+  xlab("transformed_charges") + 
+  theme_bw(base_size = 15, base_family = "") +
+  theme(legend.title = element_blank())
+```
+
+```{r}
+data$transformed_charges_synthetic <- synthetic1$transformed_charges
+ff2 <- stats::as.formula((sex - 1) ~ 1 + bmi + 
+                           smoker + region + transformed_charges_synthetic)
+model2 <- stats::model.frame(ff2, data)
+X2 <- data.frame(stats::model.matrix(ff2, model2))
+```
+
+```{r}
+fit2 <- brms::brm(data = data,
+                          family = bernoulli(link = "logit"),
+                          (sex - 1) ~ 1 + bmi + smoker + region + transformed_charges,
+                          iter = 5000,
+                          warmup = 3000,
+                          thin = 1,
+                          chains = 1,
+                          seed = 3)
+```
+
+```{r}
+post_fit2 <- brms::posterior_samples(x = fit2)
+post_fit2[1:3, ]
+```
+
+```{r}
+# bayesplot::mcmc_trace(x = fit2, 
+#                       pars = c("b_Intercept", "b_bmi",
+#                                "b_smokeryes", "b_regionnorthwest",
+#                                "b_regionsoutheast", "b_regionsouthwest",
+#                                "b_transformed_charges"))
+# bayesplot::mcmc_acf(x = fit2, 
+#                     pars = c("b_Intercept", "b_bmi",
+#                              "b_smokeryes", "b_regionnorthwest",
+#                              "b_regionsoutheast", "b_regionsouthwest",
+#                              "b_transformed_charges"))
+
+synthesize2_func <- function(X, post_draws, index, n, seed){
+  set.seed(seed)
+  log_p <- as.matrix(X) %*%
+  t(data.matrix(post_draws[index, c("b_Intercept", "b_bmi",
+                                     "b_smokeryes", "b_regionnorthwest",
+                                     "b_regionsoutheast", "b_regionsouthwest",
+                                     "b_transformed_charges")]))
+  p <- exp(log_p) / (1 + exp(log_p))
+  synthetic_Y <- stats::rbinom(n, size = 1, prob = p) + 1
+  data.frame(X, synthetic_Y)
+}
+
+n <- nrow(data)
+synthetic2 <- synthesize2_func(X = X2,
+                              post_draws = post_fit2,
+                              index = 1,
+                              n = nrow(X2),
+                              seed = 4)
+names(synthetic2) <- c("Intercept", "bmi",
+                       "smokeryes", "regionnorthwest",
+                       "regionsoutheast", "regionsouthwest",
+                       "transformed_charges", "sex")
+```
+
+```{r}
+df3 <- data.frame(confidential = data$sex, 
+                 synthetic = synthetic2$sex)
+df_long3 <- reshape2::melt(df3)
+
+ggplot2::ggplot(data = df_long3, aes(x = value, fill = variable)) +
+  geom_histogram(binwidth = 0.5, position = position_dodge()) +  
+  scale_fill_manual(values = c("#E69F00", "#999999")) + 
+  ggtitle("Confidential Sex vs Synthetic Sex") + 
+  xlab("Sex") + 
+  theme_bw(base_size = 15, base_family = "") +
+  theme(legend.title = element_blank()) 
+```
+
+```{r}
+data$sex_synthetic <- synthetic2$sex
+ff3 <- stats::as.formula(age_cat ~ 1 + bmi + 
+                           smoker + region + 
+                           transformed_charges_synthetic + sex_synthetic)
+model3 <- stats::model.frame(ff3, data)
+X3 <- data.frame(stats::model.matrix(ff3, model3))
+```
+
+```{r}
+fit3 <- brms::brm(data = data,
+                    family = categorical(link = "logit"),
+                    age_cat ~ 1 + bmi + 
+                           smoker + region + 
+                           transformed_charges + sex,
+                    iter = 5000,
+                    warmup = 3000,
+                    thin = 1,
+                    chains = 1,
+                    seed = 5)
+```
+
+```{r}
+post3 <- brms::posterior_samples(x = fit3)
+post3[1:3, ]
+```
+
+```{r}
+synthesize3_func <- function(X, post_draws, index, n, C, seed){
+  set.seed(seed)
+  log_p_allC <- matrix(NA, nrow = n, ncol = C)
+  for (c in 2:C){
+    name_Intercept_c <- paste0("b_mu", c, "_Intercept")
+    name_bmi_c <- paste0("b_mu", c, "_bmi")
+    name_smokeryes_c <- paste0("b_mu", c, "_smokeryes")
+    name_regionnorthwest_c <- paste0("b_mu", c, "_regionnorthwest")
+    name_regionsoutheast_c <- paste0("b_mu", c, "_regionsoutheast")
+    name_regionsouthwest_c <- paste0("b_mu", c, "_regionsouthwest")
+    name_transformed_charges_c <- paste0("b_mu", c, "_transformed_charges")
+    name_sex_c <- paste0("b_mu", c, "_sex")
+    log_p_c <- as.matrix(X) %*% 
+      t(post_draws[index, 
+                   c(name_Intercept_c, name_bmi_c,
+                     name_smokeryes_c, name_regionnorthwest_c,
+                     name_regionsoutheast_c, name_regionsouthwest_c,
+                     name_transformed_charges_c, name_sex_c)])
+    log_p_allC[, c] <- log_p_c
+  }
+  log_p_allC[, 1] <- rep(0, n)
+  p_allC <- exp(log_p_allC) / (1 + exp(log_p_allC))
+  
+  synthetic_Y <- rep(NA, n)
+  for (i in 1:n){
+    synthetic_Y[i] <- which(stats::rmultinom(n = 1, size = 1,
+                                            prob = p_allC[i, ]) == 1)
+  }
+  data.frame(X, synthetic_Y)
+}
+
+synthetic3 <- synthesize3_func(X = X3,
+                              post_draws = post3,
+                              index = 1,
+                              n = nrow(X3),
+                              C = 3,
+                              seed = 6)
+names(synthetic3) <- c("Intercept", "bmi", "smokeryes", 
+                       "northwest", "southeast", "southwest",
+                       "transformed_charges", "sex", "age_cat")
+```
+
+```{r}
+df4 <- data.frame(confidential = as.numeric(data$age_cat),
+                 synthetic = as.numeric(synthetic3$age_cat))
+df_long4 <- reshape2::melt(df4)
+
+ggplot2::ggplot(data = df_long4, aes(x = value, fill = variable)) +
+  geom_histogram(binwidth = 0.5, position = position_dodge()) +  
+  scale_fill_manual(values = c("#E69F00", "#999999")) + 
+  ggtitle("Confidential age vs synthetic age") + 
+  xlab("age groups") + 
+  theme_bw(base_size = 15, base_family = "") +
+  theme(legend.title = element_blank())
+
+data$age_cat_synthetic <- synthetic3$age_cat
+```
+
+```{r}
+org <- original %>% dplyr::select("sex", "bmi", "children", 
+                           "smoker", "region", "charges", "age_cat")
+data$charges <- predict(chargesBN, newdata = data$transformed_charges_synthetic,
+                        inverse = TRUE)
+syn <- data %>% dplyr::select("sex_synthetic", "bmi", "children",
+                       "smoker", "region", "charges", "age_cat_synthetic")
+syn <- syn %>% rename(sex = sex_synthetic, age_cat = age_cat_synthetic)
+syn$age_cat <- factor(syn$age_cat)
+```
+
+\subsection{Global utility check: eCDF}
+
+```{r}
+merged_data <- rbind(org, syn)
+merged_data$S <- c(rep(0, n), rep(1, n))
+
+ecdf_orig0 <- stats::ecdf(org$charges)
+ecdf_syn0 <- stats::ecdf(syn$charges)
+
+percentile_orig0 <- ecdf_orig0(merged_data$charges)
+percentile_syn0 <- ecdf_syn0(merged_data$charges)
+
+ecdf_diff0 <- percentile_orig0 - percentile_syn0
+Um0 <- max(abs(ecdf_diff0))
+Um0
+Ua0 <- mean(ecdf_diff0^2)
+Ua0
+
+ecdf_orig1 <- stats::ecdf(org$sex)
+ecdf_syn1 <- stats::ecdf(syn$sex)
+
+percentile_orig1 <- ecdf_orig1(merged_data$sex)
+percentile_syn1 <- ecdf_syn1(merged_data$sex)
+
+ecdf_diff1 <- percentile_orig1 - percentile_syn1
+Um1 <- max(abs(ecdf_diff1))
+Um1
+Ua1 <- mean(ecdf_diff1^2)
+Ua1
+
+ecdf_orig2 <- stats::ecdf(org$age_cat)
+ecdf_syn2 <- stats::ecdf(syn$age_cat)
+
+percentile_orig2 <- ecdf_orig2(merged_data$age_cat)
+percentile_syn2 <- ecdf_syn2(merged_data$age_cat)
+
+ecdf_diff2 <- percentile_orig2 - percentile_syn2
+Um2 <- max(abs(ecdf_diff2))
+Um2
+Ua2 <- mean(ecdf_diff2^2)
+Ua2
+```
+
+\subsection{Global utility check: pMSE}
+
+```{r}
+log_reg <- stats::glm(formula = S ~ (as.factor(sex) + bmi + as.factor(children) +
+                                       smoker + region + charges + as.factor(age_cat))^2,
+                      family = "binomial",
+                      data = merged_data)
+
+pred <- stats::predict(log_reg,
+                       data = merged_data)
+probs <- exp(pred) / (1 + exp(pred))
+
+pMSE <- 1 / (2 * n) * sum((probs - 1 / 2)^2)
+pMSE
+```
+
+
+\subsection{Inference for average charges}
+
+```{r}
+n <- nrow(org)
+m <- 20
+synthetic_m_partial <- vector("list", m)
+for (l in 1:m) {
+  synthetic_one_partial <- synthesize3_func(X = X3,
+                                            post_draws = post3,
+                                            index = l,
+                                            n = n,
+                                            C = 3,
+                                            seed = m + l)
+  names(synthetic_one_partial) <- c("Intercept", "bmi", "smokeryes", 
+                                     "northwest", "southeast", "southwest",
+                                     "transformed_charges", "sex", "age_cat")
+  synthetic_one_partial$charges <- predict(chargesBN, newdata = 
+                                             synthetic_one_partial$transformed_charges,
+                                           inverse = TRUE)
+  synthetic_m_partial[[l]] <- synthetic_one_partial
+}
+
+q <- rep(NA, m)
+v <- rep(NA, m)
+for (l in 1:m){
+  synthetic_one_partial <- synthetic_m_partial[[l]]
+  q[l] <- mean(synthetic_one_partial$charges)
+  v[l] <- var(synthetic_one_partial$charges)/n
+}
+
+q_bar_m <- mean(q)
+b_m <- var(q)
+v_bar_m <- mean(v)
+
+T_p <- b_m / m + v_bar_m
+v_p <- (m - 1) * (1 + v_bar_m / (b_m / m))^2
+
+q_bar_m
+t_score_syn <- qt(p = 0.975, df = v_p)
+c(q_bar_m - t_score_syn * sqrt(T_p), 
+  q_bar_m + t_score_syn * sqrt(T_p))
+
+mean_con <- mean(org$charges)
+sd_con <- sd(org$charges)
+t_score_con <- qt(p = 0.975, df = n - 1)
+mean_con
+c(mean_con - t_score_con * sd_con / sqrt(n), 
+  mean_con + t_score_con * sd_con / sqrt(n))
+```
+
+```{r}
+
+ggplot(data, aes(x = log(syn$charges))) + geom_density()
+
+ComputeBeta1 <- function(m, syndata, index){
+
+Beta1_q <- rep(NA, m)
+Beta1_v <- rep(NA, m)
+
+for (l in 1:m){
+  syndata_l <- syndata[[l]]
+  syndata_l_lm <- stats::lm(formula = log(charges) ~ 1 + bmi + as.factor(smokeryes) +
+                              as.factor(northwest) + as.factor(southeast) +
+                              as.factor(southwest) + as.factor(age_cat) + 
+                              as.factor(sex), data = syndata_l)
+  coef_output <- coef(summary(syndata_l_lm))
+  Beta1_q[l] <- coef_output[index, 1]
+  Beta1_v[l] <- coef_output[index, 2]^2
+}
+
+Beta1_q_bar_m <- mean(Beta1_q)
+Beta1_b_m <- var(Beta1_q)
+Beta1_v_bar_m <- mean(Beta1_v)
+
+Beta1_T_p <- Beta1_b_m / m + Beta1_v_bar_m
+
+Beta1_v_p <- (m - 1) * (1 + Beta1_v_bar_m / (Beta1_b_m / m))^2
+
+
+Beta1_t_score_syn <- qt(p = 0.975, df = Beta1_v_p)
+print(c(Beta1_q_bar_m, Beta1_q_bar_m - Beta1_t_score_syn * sqrt(Beta1_T_p),
+        Beta1_q_bar_m + Beta1_t_score_syn * sqrt(Beta1_T_p)))
+}
+
+for (i in 2:9) {
+  ComputeBeta1(m = m, syndata = synthetic_m_partial, index = i)
+}
+
+
+confidata_lm <- stats::lm(formula = log(charges) ~ 1 + bmi + smoker + region + age_cat + sex, data = org)
+coef(summary(confidata_lm))
+confint(confidata_lm)
+```
+
+\subsection{Interval overlap utility measure definition 2}
+
+```{r}
+CalculateIntervalOverlap_v2 <- function(confi_interval, syn_interval){
+  
+  L_c <- confi_interval[1]
+  U_c <- confi_interval[2]
+  L_s <- syn_interval[1]
+  U_s <- syn_interval[2]
+  
+  overlap <- 1 / 2 * ((min(U_c, U_s) - max(L_c, L_s)) / (U_c - L_c) + 
+                        (min(U_c, U_s) - max(L_c, L_s)) / (U_s - L_s))
+  
+  return(overlap) 
+}
+
+IO1 <- CalculateIntervalOverlap_v2(c(12908.45, 14290.87), 
+                                   c(12620.95, 13919.89))
+IO1
+
+IO2 <- CalculateIntervalOverlap_v2(c(0.0094, 0.0185), 
+                                   c(0.0195, 0.0306))
+IO2
+
+IO3 <- CalculateIntervalOverlap_v2(c(1.4891, 1.6201), 
+                                   c(1.3576, 1.5200))
+IO3
+
+IO4 <- CalculateIntervalOverlap_v2(c(-0.1294, 0.0214), 
+                                   c(-0.1131, 0.0728))
+IO4
+
+IO5 <- CalculateIntervalOverlap_v2(c(-0.2372, -0.0855), 
+                                   c(-0.3110, -0.1232))
+IO5
+
+IO6 <- CalculateIntervalOverlap_v2(c(-0.1968, -0.0454), 
+                                   c(-0.2349, -0.0473))
+IO6
+
+IO7 <- CalculateIntervalOverlap_v2(c(0.6153, 0.7409), 
+                                   c(0.2770, 0.4329))
+IO7
+
+IO8 <- CalculateIntervalOverlap_v2(c(1.1190, 1.2558), 
+                                   c(0.6229, 0.7985))
+IO8
+
+IO9 <- CalculateIntervalOverlap_v2(c(0.0212, 0.1267), 
+                                   c(0.0753, 0.2073))
+IO9
+```
+
+\subsection{Risk evaluation: matched based}
+
+```{r}
+n <- dim(org)[1]
+syn <- syn[, names(org)]
+con <- org
+
+CalculateKeyQuantities_cat <- function(condata, syndata, 
+                                   known.vars, syn.vars, n){
+  condata <- condata
+  syndata <- syndata
+  n <- n
+
+  c_vector <- rep(NA, n)
+  T_vector <- rep(NA, n)
+
+  for (i in 1:n){
+    match <- (eval(parse(text=paste("condata$",syn.vars,
+                                    "[i]==syndata$",syn.vars,
+                                    sep="",collapse="&")))&
+                  eval(parse(text=paste("condata$",known.vars,
+                                        "[i]==syndata$",
+                                        known.vars,sep="",
+                                        collapse="&"))))
+    match.prob <- ifelse(match, 1/sum(match), 0)
+    
+    if (max(match.prob) > 0){
+      c_vector[i] <- length(match.prob[match.prob 
+                                       == max(match.prob)])
+    }
+    else
+      c_vector[i] <- 0
+      T_vector[i] <- is.element(i, rownames(condata)
+                                [match.prob == max(match.prob)])
+  }
+  
+  K_vector <- (c_vector * T_vector == 1)
+  F_vector <- (c_vector * (1 - T_vector) == 1)
+  s <- length(c_vector[c_vector == 1 & is.na(c_vector) == FALSE])
+  
+  res_r <- list(c_vector = c_vector,
+                T_vector = T_vector,
+                K_vector = K_vector,
+                F_vector = F_vector,
+                s = s
+  )
+  return(res_r)
+}
+
+KeyQuantities <- CalculateKeyQuantities_cat(condata = con, 
+                                                syndata = syn, 
+                                                known.vars = c("children", 
+                                                               "smoker", 
+                                                               "region"),
+                                                syn.vars = c("sex", 
+                                                             "age_cat"), 
+                                                n = n)
+
+IdentificationRiskCal <- function(c_vector, T_vector, 
+                                  K_vector, F_vector, 
+                                  s, N){
+  
+  nonzero_c_index <- which(c_vector > 0)
+
+  exp_match_risk <- sum(1/c_vector[nonzero_c_index] * 
+                          T_vector[nonzero_c_index])
+  true_match_rate <- sum(na.omit(K_vector))/N
+  false_match_rate <- sum(na.omit(F_vector))/s
+
+  res_r <- list(exp_match_risk = exp_match_risk,
+                true_match_rate = true_match_rate,
+                false_match_rate = false_match_rate
+  )
+  return(res_r)
+}
+
+res <- IdentificationRiskCal(c_vector = KeyQuantities[["c_vector"]], 
+                                 T_vector = KeyQuantities[["T_vector"]],
+                                 K_vector = KeyQuantities[["K_vector"]], 
+                                 F_vector = KeyQuantities[["F_vector"]],
+                                 s = KeyQuantities[["s"]], 
+                                 N = n)
+
+res[["exp_match_risk"]]
+res[["true_match_rate"]]
+res[["false_match_rate"]]
+KeyQuantities[["s"]]
+
+KeyQuantities <- CalculateKeyQuantities_cat(condata = con, 
+                                                syndata = con, 
+                                                known.vars = c("children", 
+                                                               "smoker", 
+                                                               "region"),
+                                                syn.vars = c("sex", 
+                                                             "age_cat"), 
+                                                n = n)
+
+res <- IdentificationRiskCal(c_vector = KeyQuantities[["c_vector"]], 
+                                 T_vector = KeyQuantities[["T_vector"]],
+                                 K_vector = KeyQuantities[["K_vector"]], 
+                                 F_vector = KeyQuantities[["F_vector"]],
+                                 s = KeyQuantities[["s"]], 
+                                 N = n)
+
+res[["exp_match_risk"]]
+res[["true_match_rate"]]
+res[["false_match_rate"]]
+KeyQuantities[["s"]]
+```
+
+```{r}
+CalculateKeyQuantities_cont <- function(condata, syndata, 
+                                   known.vars, syn.vars, 
+                                   n, r){
+  condata <- condata
+  syndata <- syndata
+  n <- n
+
+  c_vector <- rep(NA, n)
+  T_vector <- rep(NA, n)
+
+  for (i in 1:n){
+    radius <- r*eval(parse(text=paste("condata$",syn.vars,"[i]")))
+    match <- (eval(parse(text=paste("syndata$",syn.vars,
+                                    "<=condata$",syn.vars,
+                                    "[i]+",radius,sep="",
+                                    collapse="&")))&
+                eval(parse(text=paste("syndata$",syn.vars,
+                                    ">=condata$",syn.vars,
+                                    "[i]-",radius,sep="",
+                                    collapse="&")))&
+                eval(parse(text=paste("condata$",known.vars,
+                                        "[i]==syndata$",
+                                        known.vars,sep="",
+                                        collapse="&"))))
+    match.prob <- ifelse(match, 1/sum(match), 0)
+    
+    if (max(match.prob) > 0){
+      c_vector[i] <- length(match.prob[match.prob 
+                                       == max(match.prob)])
+    }
+    else
+      c_vector[i] <- 0
+      T_vector[i] <- is.element(i, rownames(condata)
+                                [match.prob == max(match.prob)])
+  }
+  
+  K_vector <- (c_vector * T_vector == 1)
+  F_vector <- (c_vector * (1 - T_vector) == 1)
+  s <- length(c_vector[c_vector == 1 & is.na(c_vector) == FALSE])
+  
+  res_r <- list(c_vector = c_vector,
+                T_vector = T_vector,
+                K_vector = K_vector,
+                F_vector = F_vector,
+                s = s
+  )
+  return(res_r)
+}
+
+KeyQuantities <- CalculateKeyQuantities_cont(condata = con, 
+                                              syndata = syn, 
+                                              known.vars = c("children", 
+                                                             "smoker",
+                                                             "region"), 
+                                              syn.vars = c("charges"), 
+                                              n = n, 
+                                              r = 0.2)
+
+res <- IdentificationRiskCal(c_vector = KeyQuantities[["c_vector"]], 
+                              T_vector = KeyQuantities[["T_vector"]], 
+                              K_vector = KeyQuantities[["K_vector"]],
+                              F_vector = KeyQuantities[["F_vector"]], 
+                              s = KeyQuantities[["s"]], 
+                              N = n)
+
+res[["exp_match_risk"]]
+res[["true_match_rate"]]
+res[["false_match_rate"]]
+KeyQuantities[["s"]]
+
+KeyQuantities <- CalculateKeyQuantities_cont(condata = con, 
+                                              syndata = con, 
+                                              known.vars = c("children", 
+                                                             "smoker",
+                                                             "region"), 
+                                              syn.vars = c("charges"), 
+                                              n = n, 
+                                              r = 0.2)
+
+res <- IdentificationRiskCal(c_vector = KeyQuantities[["c_vector"]], 
+                              T_vector = KeyQuantities[["T_vector"]], 
+                              K_vector = KeyQuantities[["K_vector"]],
+                              F_vector = KeyQuantities[["F_vector"]], 
+                              s = KeyQuantities[["s"]], 
+                              N = n)
+
+res[["exp_match_risk"]]
+res[["true_match_rate"]]
+res[["false_match_rate"]]
+KeyQuantities[["s"]]
+```
+
+\subsection{Risk evaluation: record linkage}
+
+```{r}
+con$id <- 1:n
+syn$id <- 1:n
+
+pairs <- reclin2::pair_blocking(syn, con, 
+                               c("children", "smoker", "region"))
+
+pairs_keys <- reclin2::compare_pairs(pairs, 
+                                    on = c("sex", "age_cat", "charges"))
+
+m <- reclin2::problink_em(formula = ~ sex + age_cat + charges, data = pairs_keys)
+pairs_keys_pRL <- predict(pairs = pairs_keys, 
+                           object = m, 
+                           type = "weights")
+pairs_keys_pRL <- reclin2::select_greedy(pairs_keys_pRL, 
+                                          "weights", 
+                                          var = "greedy", 
+                                          threshold = 0)
+pairs_keys_pRL$true <- pairs_keys_pRL$.x == pairs_keys_pRL$.y
+table(as.data.frame(pairs_keys_pRL)[c("true", "greedy")])
+
+pairs <- reclin2::pair_blocking(con, con, 
+                               c("children", "smoker", "region"))
+
+pairs_keys <- reclin2::compare_pairs(pairs, 
+                                    on = c("sex", "age_cat", "charges"))
+
+m <- reclin2::problink_em(formula = ~ sex + age_cat + charges, data = pairs_keys)
+pairs_keys_pRL <- predict(pairs = pairs_keys, 
+                           object = m, 
+                           type = "weights")
+pairs_keys_pRL <- reclin2::select_greedy(pairs_keys_pRL, 
+                                          "weights", 
+                                          var = "greedy", 
+                                          threshold = 0)
+pairs_keys_pRL$true <- pairs_keys_pRL$.x == pairs_keys_pRL$.y
+table(as.data.frame(pairs_keys_pRL)[c("true", "greedy")])
+```
+
+\subsection{Risk evaluation: CAP}
+
+```{r}
+CalculateIndividualCAP <- function(condata_i, syndata, 
+                                   key.vars, target.vars){
+  condata_i <- condata_i
+  syndata <- syndata
+  m <- nrow(syndata)
+  
+  match_key <- eval(parse(text=paste("condata_i$",key.vars,
+                                     "==syndata$",
+                                     key.vars,sep="",
+                                     collapse="&")))
+  
+  match_key_target <- (eval(parse(text=paste("condata_i$",key.vars,
+                                             "==syndata$",key.vars,
+                                             sep="",collapse="&")))&
+                         eval(parse(text=paste("condata_i$",target.vars,
+                                               "==syndata$",target.vars,
+                                               sep="",collapse="&"))))
+  
+  if (sum(match_key) > 0)
+    CAP_i <- sum(match_key_target) / sum(match_key)
+  else
+    CAP_i <- 0
+  
+  return(CAP_i)
+}
+```
+
+```{r}
+CAP_syn_all <- rep(NA, n)
+for (i in 1:n){
+  CAP_syn_all[i] <- CalculateIndividualCAP(condata_i = con[i, ], 
+                                           syndata = syn,
+                                           key.vars = c("children", 
+                                                        "smoker", 
+                                                        "region"),
+                                           target.vars = c("sex"))
+}
+mean(CAP_syn_all)
+```
+
+```{r}
+CAP_syn_all <- rep(NA, n)
+for (i in 1:n){
+  CAP_syn_all[i] <- CalculateIndividualCAP(condata_i = con[i, ], 
+                                           syndata = con,
+                                           key.vars = c("children", 
+                                                        "smoker", 
+                                                        "region"),
+                                           target.vars = c("sex"))
+}
+mean(CAP_syn_all)
+```
+
+```{r}
+CAP_syn_all <- rep(NA, n)
+for (i in 1:n){
+  CAP_syn_all[i] <- CalculateIndividualCAP(condata_i = con[i, ], 
+                                           syndata = syn,
+                                           key.vars = c("children", 
+                                                        "smoker", 
+                                                        "region"),
+                                           target.vars = c("age_cat"))
+}
+mean(CAP_syn_all)
+```
+
+```{r}
+CAP_syn_all <- rep(NA, n)
+for (i in 1:n){
+  CAP_syn_all[i] <- CalculateIndividualCAP(condata_i = con[i, ], 
+                                           syndata = con,
+                                           key.vars = c("children", 
+                                                        "smoker", 
+                                                        "region"),
+                                           target.vars = c("age_cat"))
+}
+mean(CAP_syn_all)
+```
+
+```{r}
+CalculateIndividualCAP <- function(condata_i, syndata, 
+                                   key.vars, target.vars, r){
+  condata_i <- condata_i
+  syndata <- syndata
+  m <- nrow(syndata)
+  
+  match_key <- eval(parse(text=paste("condata_i$",key.vars,
+                                     "==syndata$",
+                                     key.vars,sep="",
+                                     collapse="&")))
+  radius <- r*eval(parse(text=paste("condata_i$",target.vars)))
+  match_key_target <- (eval(parse(text=paste("syndata$",target.vars,
+                                            "<=condata_i$",target.vars,
+                                            "+",radius,sep="",
+                                            collapse="&")))&
+                        eval(parse(text=paste("syndata$",target.vars,
+                                            ">=condata_i$",target.vars,
+                                            "-",radius,sep="",
+                                            collapse="&")))&
+                        eval(parse(text=paste("condata_i$",key.vars,
+                                                "==syndata$",
+                                                key.vars,sep="",
+                                                collapse="&"))))
+  
+  if (sum(match_key) > 0)
+    CAP_i <- sum(match_key_target) / sum(match_key)
+  else
+    CAP_i <- 0
+  
+  return(CAP_i)
+}
+```
+
+
+```{r}
+CAP_syn_all <- rep(NA, n)
+for (i in 1:n){
+  CAP_syn_all[i] <- CalculateIndividualCAP(condata_i = con[i, ], 
+                                           syndata = syn,
+                                           key.vars = c("children", 
+                                                        "smoker", 
+                                                        "region"),
+                                           target.vars = c("charges"),
+                                           r = 0.2)
+}
+mean(CAP_syn_all)
+```
+
+```{r}
+CAP_syn_all <- rep(NA, n)
+for (i in 1:n){
+  CAP_syn_all[i] <- CalculateIndividualCAP(condata_i = con[i, ], 
+                                           syndata = con,
+                                           key.vars = c("children", 
+                                                        "smoker", 
+                                                        "region"),
+                                           target.vars = c("charges"),
+                                           r = 0.2)
+}
+mean(CAP_syn_all)
+```
+
+\subsection{Risk evaluation: classification-based}
+
+```{r}
+set.seed(301)
+fit.knn_syn <- caret::train(charges ~ as.factor(sex) + bmi + as.factor(children) + 
+                              as.factor(smoker) + as.factor(region) + as.factor(age_cat),
+                            data=syn,
+                            preProcess=c("center", "scale"),
+                            method="knn",
+                            tuneGrid = data.frame(k=c(10)),
+                            trControl=trainControl(method="none"),
+                            metric="RMSE",
+                            na.action=na.omit)
+
+pred_syn <- predict(fit.knn_syn, newdata=subset(con, select=c(sex, bmi, children,
+                                                              smoker, region, age_cat)))
+
+fit.knn_con <- caret::train(charges ~ as.factor(sex) + bmi + as.factor(children) + 
+                              as.factor(smoker) + as.factor(region) + as.factor(age_cat),
+                            data=con,
+                            preProcess=c("center", "scale"),
+                            method="knn",
+                            tuneGrid = data.frame(k=c(10)),
+                            trControl=trainControl(method="none"),
+                            metric="RMSE",
+                            na.action=na.omit)
+
+pred_con <- predict(fit.knn_con, newdata=subset(con, select=c(sex, bmi, children,
+                                                              smoker, region, age_cat)))
+
+kNN_MSE_syn <- mean((con$charges - 
+                          pred_syn)^2)
+kNN_MSE_syn
+
+kNN_MSE_con <- mean((con$charges - 
+                           pred_con)^2)
+kNN_MSE_con
+
+relative_error_syn <- (abs(con$charges - 
+                             pred_syn)/con$charges)
+relative_error_con <- (abs(con$charges - 
+                             pred_con)/con$charges)
+mean(relative_error_con > relative_error_syn)
+```
+
+```{r}
+set.seed(301)
+fit.knn_syn <- caret::train(as.factor(sex) ~ charges + bmi + as.factor(children) + 
+                              as.factor(smoker) + as.factor(region) + as.factor(age_cat),
+                            data=syn,
+                            preProcess=c("center", "scale"),
+                            method="knn",
+                            tuneGrid = data.frame(k=c(10)),
+                            trControl=trainControl(method="none"),
+                            metric="Accuracy",
+                            na.action=na.omit)
+
+pred_syn <- predict(fit.knn_syn, newdata=subset(con, select=c(charges, bmi, children,
+                                                              smoker, region, age_cat)))
+
+fit.knn_con <- caret::train(as.factor(sex) ~ charges + bmi + as.factor(children) + 
+                              as.factor(smoker) + as.factor(region) + as.factor(age_cat),
+                            data=con,
+                            preProcess=c("center", "scale"),
+                            method="knn",
+                            tuneGrid = data.frame(k=c(10)),
+                            trControl=trainControl(method="none"),
+                            metric="Accuracy",
+                            na.action=na.omit)
+
+pred_con <- predict(fit.knn_con, newdata=subset(con, select=c(charges, bmi, children,
+                                                              smoker, region, age_cat)))
+
+kNN_error_syn <- mean(pred_syn != con$sex)
+kNN_error_syn
+kNN_error_con <- mean(pred_con != con$sex)
+kNN_error_con
+
+relative_error_syn <- (pred_syn != con$sex)
+relative_error_con <- (pred_con != con$sex)
+mean(relative_error_con != relative_error_syn)
+```
+
+```{r}
+set.seed(302)
+fit.knn_syn <- caret::train(as.factor(age_cat) ~ charges + bmi + as.factor(children) + 
+                              as.factor(smoker) + as.factor(region) + as.factor(sex),
+                            data=syn,
+                            preProcess=c("center", "scale"),
+                            method="knn",
+                            tuneGrid = data.frame(k=c(10)),
+                            trControl=trainControl(method="none"),
+                            metric="Accuracy",
+                            na.action=na.omit)
+
+pred_syn <- predict(fit.knn_syn, newdata=subset(con, select=c(charges, bmi, children,
+                                                              smoker, region, sex)))
+
+fit.knn_con <- caret::train(as.factor(age_cat) ~ charges + bmi + as.factor(children) + 
+                              as.factor(smoker) + as.factor(region) + as.factor(sex),
+                            data=con,
+                            preProcess=c("center", "scale"),
+                            method="knn",
+                            tuneGrid = data.frame(k=c(10)),
+                            trControl=trainControl(method="none"),
+                            metric="Accuracy",
+                            na.action=na.omit)
+
+pred_con <- predict(fit.knn_con, newdata=subset(con, select=c(charges, bmi, children,
+                                                              smoker, region, sex)))
+
+kNN_error_syn <- mean(pred_syn != con$age_cat)
+kNN_error_syn
+
+kNN_error_con <- mean(pred_con != con$age_cat)
+kNN_error_con
+
+relative_error_syn <- (pred_syn != con$age_cat)
+relative_error_con <- (pred_con != con$age_cat)
+mean(relative_error_con != relative_error_syn)
+```
+
+
+\subsection{Differential Privacy}
+
+```{r}
+set.seed(301)
+epsilon1 <- 0.1
+m <- 2
+epsilon_new1 <- epsilon1 / m
+charges_average <- mean(con$charges)
+Delta_f_average_charges <- 100000 / n
+rlaplace(1, charges_average, Delta_f_average_charges/epsilon_new1)
+mean(con$charges)
+
+epsilon2 <- 1000
+epsilon_new2 <- epsilon2 / m
+charges_median <- median(con$charges)
+rlaplace(1, charges_median, 100000/epsilon_new2)
+median(con$charges)
+```
+
+```{r}
+set.seed(301)
+charges_male_average <- mean(subset(con, sex == 1, select = charges)$charges)
+charges_female_average <- mean(subset(con, sex == 2, select = charges)$charges)
+
+charges_male_average
+rlaplace(1, charges_male_average, Delta_f_average_charges/epsilon1)
+
+charges_female_average
+rlaplace(1, charges_female_average, Delta_f_average_charges/epsilon1)
+```
+
+```{r}
+set.seed(301)
+charges_age1_average <- mean(subset(con, age_cat == 1)$charges)
+charges_age2_average <- mean(subset(con, age_cat == 2)$charges)
+charges_age3_average <- mean(subset(con, age_cat == 3)$charges)
+
+charges_age1_average
+rlaplace(1, charges_age1_average, Delta_f_average_charges/epsilon1)
+
+charges_age2_average
+rlaplace(1, charges_age2_average, Delta_f_average_charges/epsilon1)
+
+charges_age3_average
+rlaplace(1, charges_age3_average, Delta_f_average_charges/epsilon1)
+```
+
+```{r}
+set.seed(301)
+epsilon4 <- 0.1
+n_male <- nrow(subset(con, sex == 1))
+n_male
+n_male_df <- round(rlaplace(1, n_male, 1 / epsilon4))
+n_male_df
+
+n_female <- nrow(subset(con, sex == 2))
+n_female
+nrow(con) - n_male_df
+```
+
+
+```{r}
+set.seed(301)
+epsilon3 <- 0.1
+c <- 3
+epsilon_new3 <- epsilon3 / (c-1)
+n_age1 <- nrow(subset(con, age_cat == 1))
+n_age1
+n_age1_df <- round(rlaplace(1, n_age1, 2 / epsilon_new3))
+n_age1_df
+
+n_age2 <- nrow(subset(con, age_cat == 2))
+n_age2
+n_age2_df <- round(rlaplace(1, n_age2, 2 / epsilon_new3))
+n_age2_df
+
+n_age3 <- nrow(subset(con, age_cat == 3))
+n_age3
+nrow(con) - n_age1_df - n_age2_df
+```
+
+
