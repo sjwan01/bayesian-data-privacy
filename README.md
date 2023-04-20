@@ -6,5 +6,5 @@ Medical datasets contain a plethora of information about patients that are consi
 
 To that end, we employed Bayesian statistical models to partially synthesize information about variables that we deemed sensitive. Afterwards, we conducted utility and risk evaluations to examine whether our synthetic dataset could serve for analytical purposes while also providing sufficient protection of the confidential information. We also applied differential privacy methods to further protect the summary statistics of the confidential dataset.
 
-For modeling and analysis details, please refer to the Rmd and the report files in this repository. This the final project for my senior intensive __*Statistical Data Privacy*__, instructed by my advisor [__Professor Jingchen (Monika) Hu__](https://www.vassar.edu/faculty/jihu). All work was made using R in collaboration with my amazing partner [__Jade Wilkinson__](https://www.linkedin.com/in/jadewilkinson345/).
+For modeling and analysis details, please refer to the Rmd and the report files in this repository. This the final project for my senior intensive __*Statistical Data Privacy*__, instructed by [__Professor Jingchen (Monika) Hu__](https://www.vassar.edu/faculty/jihu). All work was made using R in collaboration with my amazing partner [__Jade Wilkinson__](https://www.linkedin.com/in/jadewilkinson345/).
 
